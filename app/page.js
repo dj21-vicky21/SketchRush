@@ -1,103 +1,286 @@
-import Image from "next/image";
+'use client';
+
+import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { io } from 'socket.io-client';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
 export default function Home() {
-  return (
-    <div className="font-sans grid grid-rows-[20px_1fr_20px] items-center justify-items-center min-h-screen p-8 pb-20 gap-16 sm:p-20">
-      <main className="flex flex-col gap-[32px] row-start-2 items-center sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={180}
-          height={38}
-          priority
-        />
-        <ol className="font-mono list-inside list-decimal text-sm/6 text-center sm:text-left">
-          <li className="mb-2 tracking-[-.01em]">
-            Get started by editing{" "}
-            <code className="bg-black/[.05] dark:bg-white/[.06] font-mono font-semibold px-1 py-0.5 rounded">
-              app/page.js
-            </code>
-            .
-          </li>
-          <li className="tracking-[-.01em]">
-            Save and see your changes instantly.
-          </li>
-        </ol>
+  const [socket, setSocket] = useState(null);
+  const [playerName, setPlayerName] = useState('');
+  const [roomCode, setRoomCode] = useState('');
+  const [isCreating, setIsCreating] = useState(false);
+  const [settings, setSettings] = useState({
+    rounds: 3,
+    drawTime: 80,
+    maxPlayers: 4
+  });
+  const [error, setError] = useState('');
+  const [isConnecting, setIsConnecting] = useState(false);
+  const router = useRouter();
 
-        <div className="flex gap-4 items-center flex-col sm:flex-row">
-          <a
-            className="rounded-full border border-solid border-transparent transition-colors flex items-center justify-center bg-foreground text-background gap-2 hover:bg-[#383838] dark:hover:bg-[#ccc] font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 sm:w-auto"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={20}
-              height={20}
+  useEffect(() => {
+    // Check for any error messages from failed game attempts
+    const gameError = localStorage.getItem('gameError');
+    if (gameError) {
+      setError(gameError);
+      localStorage.removeItem('gameError');
+    }
+
+    // Initialize socket connection with better error handling
+    const newSocket = io({
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      rememberUpgrade: true
+    });
+    
+    newSocket.on('connect', () => {
+      console.log('Socket connected:', newSocket.id);
+    });
+    
+    newSocket.on('connect_error', (error) => {
+      console.error('Socket connection error:', error);
+      setError('Connection failed. Please refresh and try again.');
+      setIsConnecting(false);
+    });
+    
+    setSocket(newSocket);
+
+    newSocket.on('room-created', (data) => {
+      // Get the player name from sessionStorage to ensure we have it
+      const savedPlayerName = sessionStorage.getItem('tempPlayerName') || playerName.trim();
+      const gameData = {
+        roomId: data.roomId,
+        playerName: savedPlayerName,
+        isOwner: true
+      };
+      console.log('Saving game data:', gameData);
+      console.log('Player name from session:', savedPlayerName);
+      localStorage.setItem('gameData', JSON.stringify(gameData));
+      // Clear the temp storage
+      sessionStorage.removeItem('tempPlayerName');
+      router.push(`/game/${data.roomId}`);
+    });
+
+    newSocket.on('room-joined', (data) => {
+      // Get the player name from sessionStorage to ensure we have it
+      const savedPlayerName = sessionStorage.getItem('tempPlayerName') || playerName.trim();
+      const gameData = {
+        roomId: data.room.id,
+        playerName: savedPlayerName,
+        isOwner: false
+      };
+      console.log('Saving game data:', gameData);
+      console.log('Player name from session:', savedPlayerName);
+      localStorage.setItem('gameData', JSON.stringify(gameData));
+      // Clear the temp storage
+      sessionStorage.removeItem('tempPlayerName');
+      router.push(`/game/${data.room.id}`);
+    });
+
+    newSocket.on('error', (data) => {
+      setError(data.message);
+      setIsConnecting(false);
+    });
+
+    return () => newSocket.close();
+  }, []);
+
+  const createRoom = () => {
+    const name = playerName.trim();
+    if (!name) {
+      setError('Please enter your name');
+      return;
+    }
+    setError('');
+    setIsConnecting(true);
+    console.log('Creating room with player name:', name);
+    
+    // Store the name temporarily so we can access it in the socket event
+    sessionStorage.setItem('tempPlayerName', name);
+    socket.emit('create-room', { playerName: name, settings });
+  };
+
+  const joinRoom = () => {
+    const name = playerName.trim();
+    const code = roomCode.trim().toUpperCase();
+    
+    if (!name) {
+      setError('Please enter your name');
+      return;
+    }
+    if (!code) {
+      setError('Please enter room code');
+      return;
+    }
+    setError('');
+    setIsConnecting(true);
+    console.log('Joining room with player name:', name, 'room code:', code);
+    
+    // Store the name temporarily so we can access it in the socket event
+    sessionStorage.setItem('tempPlayerName', name);
+    socket.emit('join-room', { roomId: code, playerName: name });
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-purple-600 to-blue-600 flex items-center justify-center p-4">
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <CardTitle className="text-4xl font-bold text-gray-800 mb-2">SketchRush Clone</CardTitle>
+          <CardDescription className="text-gray-600">Draw, guess, and have fun!</CardDescription>
+        </CardHeader>
+        <CardContent>
+
+        {error && (
+          <Badge variant="destructive" className="w-full justify-center mb-4 p-3">
+            {error}
+          </Badge>
+        )}
+
+        <div className="space-y-4">
+          <div>
+            <label htmlFor="playerName" className="block text-sm font-medium text-gray-700 mb-1">
+              Your Name
+            </label>
+            <Input
+              id="playerName"
+              type="text"
+              value={playerName}
+              onChange={(e) => setPlayerName(e.target.value)}
+              placeholder="Enter your name"
+              maxLength={20}
             />
-            Deploy now
-          </a>
-          <a
-            className="rounded-full border border-solid border-black/[.08] dark:border-white/[.145] transition-colors flex items-center justify-center hover:bg-[#f2f2f2] dark:hover:bg-[#1a1a1a] hover:border-transparent font-medium text-sm sm:text-base h-10 sm:h-12 px-4 sm:px-5 w-full sm:w-auto md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Read our docs
-          </a>
+          </div>
+
+          <div className="flex space-x-2">
+            <Button
+              onClick={() => setIsCreating(!isCreating)}
+              variant={isCreating ? "default" : "outline"}
+              className="flex-1"
+            >
+              Create Room
+            </Button>
+            <Button
+              onClick={() => setIsCreating(false)}
+              variant={!isCreating ? "default" : "outline"}
+              className="flex-1"
+            >
+              Join Room
+            </Button>
+          </div>
+
+          {isCreating ? (
+            <Card className="bg-gray-50">
+              <CardHeader>
+                <CardTitle className="text-lg">Room Settings</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">Rounds</label>
+                    <select
+                      value={settings.rounds}
+                      onChange={(e) => setSettings({...settings, rounds: parseInt(e.target.value)})}
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    >
+                      <option value={2}>2</option>
+                      <option value={3}>3</option>
+                      <option value={4}>4</option>
+                      <option value={5}>5</option>
+                    </select>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-sm text-gray-600 mb-1">Draw Time</label>
+                    <select
+                      value={settings.drawTime}
+                      onChange={(e) => setSettings({...settings, drawTime: parseInt(e.target.value)})}
+                      className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                    >
+                      <option value={60}>60s</option>
+                      <option value={80}>80s</option>
+                      <option value={100}>100s</option>
+                      <option value={120}>120s</option>
+                    </select>
+                  </div>
+                </div>
+                
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Max Players</label>
+                  <select
+                    value={settings.maxPlayers}
+                    onChange={(e) => setSettings({...settings, maxPlayers: parseInt(e.target.value)})}
+                    className="w-full px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-purple-500"
+                  >
+                    <option value={2}>2 Players</option>
+                    <option value={3}>3 Players</option>
+                    <option value={4}>4 Players</option>
+                    <option value={5}>5 Players</option>
+                    <option value={6}>6 Players</option>
+                    <option value={7}>7 Players</option>
+                    <option value={8}>8 Players</option>
+                    <option value={9}>9 Players</option>
+                    <option value={10}>10 Players</option>
+                  </select>
+                </div>
+
+                <Button
+                  onClick={createRoom}
+                  disabled={isConnecting}
+                  className="w-full"
+                >
+                  {isConnecting ? (
+                    <div className="flex items-center justify-center">
+                      <div className="spinner mr-2"></div>
+                      Creating...
+                    </div>
+                  ) : 'Create Room'}
+                </Button>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <label htmlFor="roomCode" className="block text-sm font-medium text-gray-700 mb-1">
+                  Room Code
+                </label>
+                <Input
+                  id="roomCode"
+                  type="text"
+                  value={roomCode}
+                  onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
+                  placeholder="Enter room code"
+                  maxLength={6}
+                />
+              </div>
+
+              <Button
+                onClick={joinRoom}
+                disabled={isConnecting}
+                className="w-full"
+                variant="secondary"
+              >
+                {isConnecting ? (
+                  <div className="flex items-center justify-center">
+                    <div className="spinner mr-2"></div>
+                    Joining...
+                  </div>
+                ) : 'Join Room'}
+              </Button>
+            </div>
+          )}
         </div>
-      </main>
-      <footer className="row-start-3 flex gap-[24px] flex-wrap items-center justify-center">
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/file.svg"
-            alt="File icon"
-            width={16}
-            height={16}
-          />
-          Learn
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/window.svg"
-            alt="Window icon"
-            width={16}
-            height={16}
-          />
-          Examples
-        </a>
-        <a
-          className="flex items-center gap-2 hover:underline hover:underline-offset-4"
-          href="https://nextjs.org?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <Image
-            aria-hidden
-            src="/globe.svg"
-            alt="Globe icon"
-            width={16}
-            height={16}
-          />
-          Go to nextjs.org →
-        </a>
-      </footer>
+
+        <div className="mt-8 text-center text-sm text-gray-500">
+          <p>🎨 Draw your imagination</p>
+          <p>🔮 Guess the magic</p>
+          <p className="mt-2 text-xs">Create a room to get a code, then share it with friends!</p>
+        </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
